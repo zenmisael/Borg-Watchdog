@@ -1,4 +1,4 @@
-# NOC-monitor
+# Borg Watchdog NOC-monitor
 default user/pass are admin:admin123 and viewwer:viewer123
 ## Usage:  
 ```bash
