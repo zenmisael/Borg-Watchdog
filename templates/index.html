@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>KISI NOC Dashboard</title>
+    <meta charset="UTF-8">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { background: #0b1220; color: white; font-family: sans-serif; transition: background 0.3s; }
+        
+        /* FIX: TV Mode Optimization for 13-inch Screens */
+        body.tv-mode { 
+            height: 100vh; 
+            overflow-y: auto !important; /* Allow scroll if content exceeds 13" height */
+            padding: 10px; 
+        }
+        body.tv-mode .header-main, 
+        body.tv-mode #summaryRow { margin-bottom: 10px !important; }
+        body.tv-mode #addForm, 
+        body.tv-mode .history-card { display: none !important; }
+        
+        .summary-box { border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); }
+        .summary-label { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #94a3b8; }
+        .stat-val { font-size: 48px !important; font-weight: 900 !important; color: #ffffff !important; line-height: 1; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
+        
+        /* Responsive Grid Logic */
+        .device-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); 
+            gap: 12px; 
+        }
+        
+        /* FIX: TV Mode Grid Scaling */
+        body.tv-mode .device-grid { 
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); 
+            gap: 15px;
+        }
+
+        .device-card { background: #1c2536; padding: 15px; border-radius: 12px; border-left: 6px solid #334155; position: relative; display: flex; flex-direction: column; }
+        .device-card.offline { border-left: 10px solid #ff0000; animation: pulse 0.8s infinite; }
+        
+        @keyframes pulse { 
+            0% { transform: scale(1); background: #1c2536; } 
+            50% { transform: scale(1.02); background: #450a0a; } 
+            100% { transform: scale(1); background: #1c2536; } 
+        }
+        
+        .badge-icmp { background-color: #0d6efd !important; color: white; }
+        .badge-tcp { background-color: #f472b6 !important; color: white; } 
+        .badge-zabbix { background-color: #f59e0b !important; color: #000; }
+
+        #incidentBanner { display: none; background: #ff0000; color: white; padding: 15px; text-align: center; font-weight: 900; border-radius: 10px; margin-bottom: 15px; animation: blink 1s infinite; white-space: pre-wrap; font-size: 18px; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+        .btn-xs { padding: 1px 5px; font-size: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid mt-2">
+    <div class="d-flex justify-content-between align-items-center mb-2 header-main">
+        <h4 class="m-0">KISI NOC Dashboard <span id="roleBadge" class="badge bg-secondary" style="font-size:10px;"></span></h4>
+        <div>
+            <button onclick="toggleTV()" class="btn btn-info btn-sm">TV Mode</button>
+            <button id="muteBtn" onclick="toggleMute()" class="btn btn-warning btn-sm">Mute</button>
+            <a href="/logout" class="btn btn-danger btn-sm">Logout</a>
+        </div>
+    </div>
+
+    <div class="row g-2 mb-3" id="summaryRow">
+        <div class="col"><div class="summary-box p-2 text-center bg-dark"><div class="summary-label">TOTAL</div><h2 id="totalCount" class="stat-val m-0">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#064e3b;"><div class="summary-label">ONLINE</div><h2 id="onlineCount" class="stat-val m-0" style="color: #4ade80 !important;">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#7f1d1d;"><div class="summary-label">OFFLINE</div><h2 id="offlineCount" class="stat-val m-0" style="color: #f87171 !important;">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#78350f;"><div class="summary-label">MAINT</div><h2 id="maintCount" class="stat-val m-0" style="color: #fbbf24 !important;">0</h2></div></div>
+    </div>
+
+    <div id="incidentBanner"></div>
+
+    <div id="addForm" class="card p-3 mb-3 bg-dark border-secondary">
+        <div class="row g-2">
+            <div class="col-md-2" id="hostInputWrap">
+                <input id="targetName" class="form-control form-control-sm bg-dark text-white" placeholder="Host/IP">
+            </div>
+            <div class="col-md-2" id="zabbixHostWrap" style="display:none;">
+                <select id="zabbixHostList" class="form-select form-select-sm bg-dark text-white" onchange="loadZabbixItems(this.value)">
+                    <option value="">Select Host...</option>
+                </select>
+            </div>
+            <div class="col-md-2"><input id="targetDesc" class="form-control form-control-sm bg-dark text-white" placeholder="Description"></div>
+            <div class="col-md-2">
+                <select id="monitorType" class="form-control form-control-sm bg-dark text-white" onchange="toggleMonitorFields()">
+                    <option value="icmp">ICMP (Ping)</option>
+                    <option value="tcp">TCP (Port)</option>
+                    <option value="zabbix">Zabbix Agent</option>
+                </select>
+            </div>
+            <div class="col-md-1" id="portWrap" style="display:none;"><input id="monitorPort" class="form-control form-control-sm bg-dark text-white" placeholder="Port"></div>
+            <div class="col-md-2" id="zabbixItemWrap" style="display:none;">
+                <select id="zabbixKey" class="form-select form-select-sm bg-dark text-white">
+                    <option value="">Select Item...</option>
+                </select>
+            </div>
+            <div class="col-md-1"><input id="checkInterval" class="form-control form-control-sm bg-dark text-white" value="10"></div>
+            <div class="col-md-1"><input id="timeout" class="form-control form-control-sm bg-dark text-white" value="2"></div>
+            <div class="col-md-1"><button onclick="addTarget()" class="btn btn-primary btn-sm w-100">Add</button></div>
+        </div>
+    </div>
+
+    <div id="deviceGrid" class="device-grid"></div>
+
+    <div class="card p-2 mt-3 history-card bg-dark border-secondary">
+        <h6 class="m-1">Incident History <button id="clearBtn" onclick="clearIncidents()" class="btn btn-xs btn-outline-danger float-end">Clear</button></h6>
+        <div style="max-height:150px; overflow-y:auto;">
+            <table class="table table-dark table-sm m-0 small">
+                <thead><tr><th>Target</th><th>Type</th><th>Down At</th><th>Recovered</th><th>Duration</th></tr></thead>
+                <tbody id="incidentTable"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<audio id="alarmSound" loop><source src="https://actions.google.com/sounds/v1/alarms/spaceship_alarm.ogg"></audio>
+
+<script>
+    const socket = io();
+    let alarmMuted = false, tvMode = false;
+    const isAdmin = "{{ session.role }}" === "admin";
+
+    socket.on('status_update', () => refresh());
+    roleBadge.innerText = "{{ session.role }}".toUpperCase();
+    if(!isAdmin) { if(document.getElementById('addForm')) addForm.remove(); if(document.getElementById('clearBtn')) clearBtn.remove(); }
+
+    function toggleMonitorFields() {
+        const type = monitorType.value;
+        portWrap.style.display = (type === 'tcp') ? 'block' : 'none';
+        zabbixItemWrap.style.display = (type === 'zabbix') ? 'block' : 'none';
+        zabbixHostWrap.style.display = (type === 'zabbix') ? 'block' : 'none';
+        hostInputWrap.style.display = (type === 'zabbix') ? 'none' : 'block';
+
+        if (type === 'zabbix') {
+            fetch("/zabbix_hosts").then(r => r.json()).then(hosts => {
+                let options = '<option value="">Select Host...</option>';
+                hosts.forEach(h => options += `<option value="${h.hostid}">${h.name}</option>`);
+                zabbixHostList.innerHTML = options;
+            });
+        }
+    }
+
+    function loadZabbixItems(hostid) {
+        if(!hostid) return;
+        fetch(`/zabbix_items/${hostid}`).then(r => r.json()).then(items => {
+            let options = '<option value="">Select Item...</option>';
+            items.forEach(i => options += `<option value="${i.key_}">${i.name}</option>`);
+            zabbixKey.innerHTML = options;
+        });
+    }
+
+    function refresh() {
+        fetch("/status").then(r => r.json()).then(data => {
+            let html = "", offItems = [];
+            let counts = { t:0, o:0, f:0, m:0 };
+            data.forEach(d => {
+                counts.t++;
+                let cls = "online", stText = d.status;
+                const mType = d.monitor_type.toLowerCase();
+                let mTypeLabel = 'ICMP', badgeClass = 'badge-icmp';
+
+                if(mType === 'tcp') { mTypeLabel = `TCP:${d.monitor_port}`; badgeClass = 'badge-tcp'; } 
+                else if(mType === 'zabbix') { mTypeLabel = `ZBX:${d.zabbix_item_key}`; badgeClass = 'badge-zabbix'; }
+
+                if(d.maintenance) { counts.m++; cls="maintenance"; stText="MAINT"; }
+                else if(d.status !== "Online") { counts.f++; cls="offline"; offItems.push(`${d.name} (${d.description})`); }
+                else counts.o++;
+
+                html += `<div class="device-card ${cls}">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <b class="text-truncate" style="max-width:150px;">${d.name}</b>
+                        <span class="badge ${badgeClass}" style="font-size:9px;">${mTypeLabel}</span>
+                    </div>
+                    <div class="small opacity-75 text-truncate">${d.description || ''}</div>
+                    <div class="mt-2 d-flex justify-content-between align-items-center">
+                        <span class="fw-bold" style="color:${cls=='offline'?'#ff4444':(cls=='maintenance'?'#fbbf24':'#4ade80')}">${stText}</span>
+                        ${isAdmin && !tvMode ? `<div>
+                            <button onclick='editT(${JSON.stringify(d)})' class="btn btn-xs btn-warning">Edit</button>
+                            <button onclick="toggleMaint(${d.id})" class="btn btn-xs btn-secondary">M</button>
+                            <button onclick="delT(${d.id})" class="btn btn-xs btn-danger">X</button>
+                        </div>` : ''}
+                    </div>
+                </div>`;
+            });
+            deviceGrid.innerHTML = html;
+            totalCount.innerText = counts.t; onlineCount.innerText = counts.o; offlineCount.innerText = counts.f; maintCount.innerText = counts.m;
+            
+            if(offItems.length > 0) {
+                incidentBanner.style.display = "block";
+                incidentBanner.innerText = "🚨 EMERGENCY: HOSTS DOWN 🚨\n" + offItems.join("\n");
+                if(!alarmMuted) alarmSound.play().catch(()=>{});
+            } else { incidentBanner.style.display = "none"; alarmSound.pause(); }
+        });
+        if(!tvMode) {
+            fetch("/incidents").then(r => r.json()).then(data => {
+                let rows = "";
+                data.forEach(i => rows += `<tr><td>${i.target}</td><td>${i.monitor_detail}</td><td>${i.down_time}</td><td>${i.up_time||'-'}</td><td>${i.duration||'-'}</td></tr>`);
+                incidentTable.innerHTML = rows;
+            });
+        }
+    }
+
+    function addTarget() {
+        const type = monitorType.value;
+        const nameValue = (type === 'zabbix') ? zabbixHostList.value : targetName.value;
+        if(!nameValue) return alert("Host/IP is required");
+        const p = new URLSearchParams();
+        p.append("name", nameValue); p.append("description", targetDesc.value);
+        p.append("monitor_type", type); p.append("monitor_port", monitorPort.value || 0);
+        p.append("zabbix_item_key", zabbixKey.value || "");
+        p.append("check_interval", checkInterval.value); p.append("timeout", timeout.value);
+        fetch("/add", {method:"POST", body:p}).then(() => { 
+            alert("Host Successfully Added!");
+            targetName.value=""; targetDesc.value=""; refresh();
+        });
+    }
+
+    function editT(d) {
+        const nDesc = prompt("New Description:", d.description); if(nDesc===null) return;
+        const nInt = prompt("New Interval (sec):", d.check_interval); if(nInt===null) return;
+        const nOut = prompt("New Timeout (sec):", d.timeout); if(nOut===null) return;
+        const p = new URLSearchParams(); p.append("description", nDesc); p.append("check_interval", nInt); p.append("timeout", nOut);
+        fetch("/update_target/"+d.id, {method:"POST", body:p}).then(()=>refresh());
+    }
+
+    function toggleTV() { 
+        tvMode = !tvMode; 
+        document.body.classList.toggle("tv-mode", tvMode);
+        if(tvMode) document.documentElement.requestFullscreen().catch(()=>{});
+        else if (document.fullscreenElement) document.exitFullscreen();
+        refresh(); 
+    }
+    function toggleMute() { alarmMuted = !alarmMuted; muteBtn.innerText = alarmMuted ? "Unmute" : "Mute"; if(alarmMuted) alarmSound.pause(); }
+    function toggleMaint(id) { fetch("/toggle_maintenance/"+id, {method:"POST"}).then(()=>refresh()); }
+    function delT(id) { if(confirm("Delete Host?")) fetch("/remove/"+id, {method:"POST"}).then(()=>refresh()); }
+    function clearIncidents() { if(confirm("Clear Logs?")) fetch("/clear_incidents", {method:"POST"}).then(()=>refresh()); }
+
+    refresh();
+</script>
+</body>
+</html>

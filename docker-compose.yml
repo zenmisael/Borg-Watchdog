@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  noc:
+    build: .
+    container_name: borg-watchdog
+
+    network_mode: host
+#    ports:
+#      - "5555:5555"
+
+    volumes:
+      - ./data:/app/data
+      - ./templates:/app/templates
+
+    cap_add:
+      - NET_RAW
+
+    environment:
+      TZ: Asia/Jakarta
+      TELEGRAM_TOKEN: xxxxxxx:AAGM6Qd6rd9_knTWVQBnKkh_oGaHE55cXBg
+      TELEGRAM_CHAT_ID: -xxxxxx1
+
+
+    restart: unless-stopped
